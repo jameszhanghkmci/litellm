@@ -13,6 +13,9 @@ litellm_settings:
     type: local         # Type of cache (options: "local", "redis", "s3")
 
 model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params: 
+      model: vertex_ai/gemini-1.0-pro-002
   - model_name: gemini-pro
     litellm_params: 
       model: vertex_ai/gemini-1.0-pro-002
