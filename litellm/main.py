@@ -12,7 +12,6 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
-
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -3783,6 +3782,9 @@ async def ahealth_check(
             )
 
             api_base = model_params.get("api_base") or get_secret("OPENAI_API_BASE")
+
+            if custom_llm_provider == "text-completion-openai":
+                mode = "completion"
 
             response = await openai_chat_completions.ahealth_check(
                 model=model,
