@@ -12,6 +12,7 @@ from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
+
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -67,6 +68,7 @@ from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.anthropic import AnthropicChatCompletion
+from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -99,6 +101,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
+anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
@@ -339,6 +342,7 @@ async def acompletion(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=completion_kwargs,
+            extra_kwargs=kwargs,
         )
 
 
@@ -1165,10 +1169,11 @@ def completion(
                     or get_secret("ANTHROPIC_API_BASE")
                     or "https://api.anthropic.com/v1/complete"
                 )
-                response = anthropic_text.completion(
+                response = anthropic_text_completions.completion(
                     model=model,
                     messages=messages,
                     api_base=api_base,
+                    acompletion=acompletion,
                     custom_prompt_dict=litellm.custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
@@ -1673,7 +1678,11 @@ def completion(
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
-
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
             if "claude-3" in model:
                 model_response = vertex_ai_anthropic.completion(
                     model=model,
@@ -1686,6 +1695,7 @@ def completion(
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
                     logging_obj=logging,
                     acompletion=acompletion,
                 )
@@ -1701,6 +1711,7 @@ def completion(
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
                     logging_obj=logging,
                     acompletion=acompletion,
                 )
@@ -1930,9 +1941,16 @@ def completion(
                 or "http://localhost:11434"
             )
 
+            api_key = (
+                api_key
+                or litellm.ollama_key
+                or os.environ.get("OLLAMA_API_KEY")
+                or litellm.api_key
+            )
             ## LOGGING
             generator = ollama_chat.get_ollama_response(
                 api_base,
+                api_key,
                 model,
                 messages,
                 optional_params,
@@ -2128,6 +2146,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2489,6 +2508,7 @@ async def aembedding(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -2798,6 +2818,11 @@ def embedding(
                 or litellm.vertex_location
                 or get_secret("VERTEXAI_LOCATION")
             )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
 
             response = vertex_ai.embedding(
                 model=model,
@@ -2808,6 +2833,7 @@ def embedding(
                 model_response=EmbeddingResponse(),
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
                 aembedding=aembedding,
                 print_verbose=print_verbose,
             )
@@ -2924,7 +2950,10 @@ def embedding(
         )
         ## Map to OpenAI Exception
         raise exception_type(
-            model=model, original_exception=e, custom_llm_provider=custom_llm_provider
+            model=model,
+            original_exception=e,
+            custom_llm_provider=custom_llm_provider,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3018,6 +3047,7 @@ async def atext_completion(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3355,6 +3385,7 @@ async def aimage_generation(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
@@ -3554,6 +3585,7 @@ def image_generation(
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=locals(),
+            extra_kwargs=kwargs,
         )
 
 
@@ -3603,6 +3635,7 @@ async def atranscription(*args, **kwargs):
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=args,
+            extra_kwargs=kwargs,
         )
 
 
