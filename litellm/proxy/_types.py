@@ -4,6 +4,7 @@ import enum
 from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
 import uuid, json, sys, os
+from litellm.types.router import UpdateRouterConfig
 
 
 def hash_token(token: str):
@@ -421,6 +422,9 @@ class LiteLLM_ModelTable(LiteLLMBase):
     created_by: str
     updated_by: str
 
+    class Config:
+        protected_namespaces = ()
+
 
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
@@ -454,6 +458,27 @@ class UpdateUserRequest(GenerateRequestBase):
         return values
 
 
+class NewEndUserRequest(LiteLLMBase):
+    user_id: str
+    alias: Optional[str] = None  # human-friendly alias
+    blocked: bool = False  # allow/disallow requests for this end-user
+    max_budget: Optional[float] = None
+    budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    allowed_model_region: Optional[Literal["eu"]] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+
+    @root_validator(pre=True)
+    def check_user_info(cls, values):
+        if values.get("max_budget") is not None and values.get("budget_id") is not None:
+            raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
+
+        return values
+
+
 class Member(LiteLLMBase):
     role: Literal["admin", "user"]
     user_id: Optional[str] = None
@@ -484,9 +509,14 @@ class TeamBase(LiteLLMBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
 
+    class Config:
+        protected_namespaces = ()
+
 
 class GlobalEndUsersSpend(LiteLLMBase):
     api_key: Optional[str] = None
+    startTime: Optional[datetime] = None
+    endTime: Optional[datetime] = None
 
 
 class TeamMemberAddRequest(LiteLLMBase):
@@ -533,6 +563,9 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
 
+    class Config:
+        protected_namespaces = ()
+
     @root_validator(pre=True)
     def set_model_info(cls, values):
         dict_fields = [
@@ -568,6 +601,9 @@ class LiteLLM_BudgetTable(LiteLLMBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+
+    class Config:
+        protected_namespaces = ()
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -719,6 +755,10 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="List of alerting types. By default it is all alerts",
     )
+    alert_to_webhook_url: Optional[Dict] = Field(
+        None,
+        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
+    )
 
     alerting_threshold: Optional[int] = Field(
         None,
@@ -750,7 +790,7 @@ class ConfigYAML(LiteLLMBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: Optional[ConfigGeneralSettings] = None
-    router_settings: Optional[dict] = Field(
+    router_settings: Optional[UpdateRouterConfig] = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
     )
@@ -819,6 +859,7 @@ class UserAPIKeyAuth(
 
     api_key: Optional[str] = None
     user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
+    allowed_model_region: Optional[Literal["eu"]] = None
 
     @root_validator(pre=True)
     def check_api_key(cls, values):
@@ -864,6 +905,8 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
+    allowed_model_region: Optional[Literal["eu"]] = None
+    default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     @root_validator(pre=True)
@@ -893,6 +936,20 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
+
+
+class LiteLLM_ErrorLogs(LiteLLMBase):
+    request_id: Optional[str] = str(uuid.uuid4())
+    api_base: Optional[str] = ""
+    model_group: Optional[str] = ""
+    litellm_model_name: Optional[str] = ""
+    model_id: Optional[str] = ""
+    request_kwargs: Optional[dict] = {}
+    exception_type: Optional[str] = ""
+    status_code: Optional[str] = ""
+    exception_string: Optional[str] = ""
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):

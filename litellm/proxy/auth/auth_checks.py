@@ -95,7 +95,15 @@ def common_checks(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
-    if litellm.max_budget > 0 and global_proxy_spend is not None:
+    if (
+        litellm.max_budget > 0
+        and global_proxy_spend is not None
+        # only run global budget checks for OpenAI routes
+        # Reason - the Admin UI should continue working if the proxy crosses it's global budget
+        and route in LiteLLMRoutes.openai_routes.value
+        and route != "/v1/models"
+        and route != "/models"
+    ):
         if global_proxy_spend > litellm.max_budget:
             raise Exception(
                 f"ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
@@ -198,9 +206,9 @@ async def get_end_user_object(
 
     if end_user_id is None:
         return None
-
+    _key = "end_user_id:{}".format(end_user_id)
     # check if in cache
-    cached_user_obj = user_api_key_cache.async_get_cache(key=end_user_id)
+    cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
         if isinstance(cached_user_obj, dict):
             return LiteLLM_EndUserTable(**cached_user_obj)
@@ -215,7 +223,14 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        return LiteLLM_EndUserTable(**response.dict())
+        # save the end-user object to cache
+        await user_api_key_cache.async_set_cache(
+            key="end_user_id:{}".format(end_user_id), value=response
+        )
+
+        _response = LiteLLM_EndUserTable(**response.dict())
+
+        return _response
     except Exception as e:  # if end-user not in db
         return None
 

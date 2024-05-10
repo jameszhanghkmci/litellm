@@ -21,9 +21,10 @@ import {
   SelectItem,
   Dialog, 
   DialogPanel,
-  Icon
+  Icon,
+  TextInput,
 } from "@tremor/react";
-import { userInfoCall, adminTopEndUsersCall } from "./networking";
+import { userInfoCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
@@ -82,22 +83,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       fetchData();
     }
 
-    const fetchEndUserSpend = async () => {
-      try {
-        const topEndUsers = await adminTopEndUsersCall(accessToken, null);
-        console.log("user data response:", topEndUsers);
-        setEndUsers(topEndUsers);
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-    if (
-      userRole &&
-      (userRole == "Admin" || userRole == "Admin Viewer") &&
-      !endUsers
-    ) {
-      fetchEndUserSpend();
-    }
+
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
@@ -107,16 +93,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   if (!accessToken || !token || !userRole || !userID) {
     return <div>Loading...</div>;
   }
-
-  const onKeyClick = async (keyToken: String) => {
-    try {
-      const topEndUsers = await adminTopEndUsersCall(accessToken, keyToken);
-      console.log("user data response:", topEndUsers);
-      setEndUsers(topEndUsers);
-    } catch (error) {
-      console.error("There was an error fetching the model data", error);
-    }
-  };
 
   function renderPagination() {
     if (!userData) return null;
@@ -152,16 +128,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
+      <Grid className="gap-2 p-2 h-[80vh] w-full mt-8">
         <CreateUser userID={userID} accessToken={accessToken} teams={teams}/>
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[80vh] mb-4">
+        <div className="mb-4 mt-1">
+        <Text>These are Users on LiteLLM that created API Keys. Automatically tracked by LiteLLM</Text>
+       
+        </div>
           <TabGroup>
-            <TabList variant="line" defaultValue="1">
-              <Tab value="1">Key Owners</Tab>
-              <Tab value="2">End-Users</Tab>
-            </TabList>
+
             <TabPanels>
               <TabPanel>
+                
                 <Table className="mt-5">
                   <TableHead>
                     <TableRow>
@@ -184,7 +162,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                             ? user.models
                             : "All Models"}
                         </TableCell>
-                        <TableCell>{user.spend ? user.spend : 0}</TableCell>
+                        <TableCell>{user.spend ? user.spend?.toFixed(2) : 0}</TableCell>
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
                         </TableCell>
@@ -214,29 +192,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 <div className="flex items-center">
                   <div className="flex-1"></div>
                   <div className="flex-1 flex justify-between items-center">
-                    <Text className="w-1/4 mr-2 text-right">Key</Text>
-                    <Select defaultValue="1" className="w-3/4">
-                      {keys?.map((key: any, index: number) => {
-                        if (
-                          key &&
-                          key["key_name"] !== null &&
-                          key["key_name"].length > 0
-                        ) {
-                          return (
-                            <SelectItem
-                              key={index}
-                              value={String(index)}
-                              onClick={() => onKeyClick(key["token"])}
-                            >
-                              {key["key_name"]}
-                            </SelectItem>
-                          );
-                        }
-                      })}
-                    </Select>
+   
                   </div>
                 </div>
-                <Table>
+                {/* <Table className="max-h-[70vh] min-h-[500px]">
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>End User</TableHeaderCell>
@@ -254,7 +213,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
+                </Table> */}
               </TabPanel>
             </TabPanels>
           </TabGroup>

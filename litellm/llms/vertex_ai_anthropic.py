@@ -3,7 +3,7 @@
 import os, types
 import json
 from enum import Enum
-import requests, copy
+import requests, copy  # type: ignore
 import time, uuid
 from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
@@ -17,7 +17,7 @@ from .prompt_templates.factory import (
     extract_between_tags,
     parse_xml_params,
 )
-import httpx
+import httpx  # type: ignore
 
 
 class VertexAIError(Exception):
@@ -123,7 +123,7 @@ class VertexAIAnthropicConfig:
 
 
 """
-- Run client init
+- Run client init 
 - Support async completion, streaming
 """
 
@@ -236,17 +236,15 @@ def completion(
         if client is None:
             if vertex_credentials is not None and isinstance(vertex_credentials, str):
                 import google.oauth2.service_account
+
+                json_obj = json.loads(vertex_credentials)
+
                 creds = (
                     google.oauth2.service_account.Credentials.from_service_account_info(
-                        json.loads(vertex_credentials),
+                        json_obj,
                         scopes=["https://www.googleapis.com/auth/cloud-platform"],
                     )
                 )
-                ### CHECK IF ACCESS
-                access_token = refresh_auth(credentials=creds)
-            else:
-                import google.auth
-                creds, _ = google.auth.default()
                 ### CHECK IF ACCESS
                 access_token = refresh_auth(credentials=creds)
 
@@ -351,7 +349,7 @@ def completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        model_response.usage = usage
+        setattr(model_response, "usage", usage)
         return model_response
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
@@ -424,7 +422,7 @@ async def async_completion(
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 
