@@ -1,17 +1,3 @@
-litellm_settings:
-  #vertex_project: "" # Your Project ID
-  vertex_location: "asia-northeast1" # proj location
-  drop_params: True
-  max_budget: 100 
-  budget_duration: 30d
-  num_retries: 5
-  request_timeout: 300
-  telemetry: False
-  #context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
-  cache: True          # set cache responses to True, litellm defaults to using a redis cache
-  cache_params:         # cache_params are optional
-    type: local         # Type of cache (options: "local", "redis", "s3")
-
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params: 
@@ -130,6 +116,19 @@ model_list:
   #     api_key: fake-key
   #     api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
+litellm_settings:
+  #vertex_project: "" # Your Project ID
+  vertex_location: "asia-northeast1" # proj location
+  drop_params: True
+  max_budget: 100 
+  budget_duration: 30d
+  num_retries: 3
+  request_timeout: 300
+  telemetry: False
+  #context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:         # cache_params are optional
+    type: local         # Type of cache (options: "local", "redis", "s3")
 
 general_settings: 
   master_key: os.environ/MC_KEY # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
