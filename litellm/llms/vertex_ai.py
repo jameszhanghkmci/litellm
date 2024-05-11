@@ -35,8 +35,8 @@ class ExtendedGenerationConfig(dict):
         max_output_tokens: Optional[int] = None,
         stop_sequences: Optional[List[str]] = None,
         response_mime_type: Optional[str] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
+##        frequency_penalty: Optional[float] = None,
+##        presence_penalty: Optional[float] = None,
     ):
         super().__init__(
             temperature=temperature,
@@ -46,8 +46,8 @@ class ExtendedGenerationConfig(dict):
             max_output_tokens=max_output_tokens,
             stop_sequences=stop_sequences,
             response_mime_type=response_mime_type,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
+##            frequency_penalty=frequency_penalty,
+##            presence_penalty=presence_penalty,
         )
 
 
@@ -86,8 +86,8 @@ class VertexAIConfig:
     response_mime_type: Optional[str] = None
     candidate_count: Optional[int] = None
     stop_sequences: Optional[list] = None
-    frequency_penalty: Optional[float] = None
-    presence_penalty: Optional[float] = None
+##    frequency_penalty: Optional[float] = None
+##    presence_penalty: Optional[float] = None
 
     def __init__(
         self,
@@ -98,8 +98,8 @@ class VertexAIConfig:
         response_mime_type: Optional[str] = None,
         candidate_count: Optional[int] = None,
         stop_sequences: Optional[list] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
+##        frequency_penalty: Optional[float] = None,
+##        presence_penalty: Optional[float] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
