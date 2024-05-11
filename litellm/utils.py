@@ -33,6 +33,9 @@ from dataclasses import (
 )
 
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.caching import DualCache
+oidc_cache = DualCache()
 
 try:
     # this works in python 3.8
@@ -2943,6 +2946,7 @@ def client(original_function):
                     )
                 else:
                     return result
+                
             return result
 
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
@@ -3046,6 +3050,7 @@ def client(original_function):
                                     model_response_object=ModelResponse(),
                                     stream=kwargs.get("stream", False),
                                 )
+
                                 if kwargs.get("stream", False) == True:
                                     cached_result = CustomStreamWrapper(
                                         completion_stream=cached_result,
@@ -9411,6 +9416,72 @@ def get_secret(
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
 
+    # Example: oidc/google/https://bedrock-runtime.us-east-1.amazonaws.com/model/stability.stable-diffusion-xl-v1/invoke
+    if secret_name.startswith("oidc/"):
+        secret_name_split = secret_name.replace("oidc/", "")
+        oidc_provider, oidc_aud = secret_name_split.split("/", 1)
+        # TODO: Add caching for HTTP requests
+        match oidc_provider:
+            case "google":
+                oidc_token = oidc_cache.get_cache(key=secret_name)
+                if oidc_token is not None:
+                    return oidc_token
+
+                client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+                # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
+                response = client.get(
+                    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
+                    params={"audience": oidc_aud},
+                    headers={"Metadata-Flavor": "Google"},
+                )
+                if response.status_code == 200:
+                    oidc_token = response.text
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                    return oidc_token
+                else:
+                    raise ValueError("Google OIDC provider failed")
+            case "circleci":
+                # https://circleci.com/docs/openid-connect-tokens/
+                env_secret = os.getenv("CIRCLE_OIDC_TOKEN")
+                if env_secret is None:
+                    raise ValueError("CIRCLE_OIDC_TOKEN not found in environment")
+                return env_secret
+            case "circleci_v2":
+                # https://circleci.com/docs/openid-connect-tokens/
+                env_secret = os.getenv("CIRCLE_OIDC_TOKEN_V2")
+                if env_secret is None:
+                    raise ValueError("CIRCLE_OIDC_TOKEN_V2 not found in environment")
+                return env_secret
+            case "github":
+                # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
+                actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+                actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+                if actions_id_token_request_url is None or actions_id_token_request_token is None:
+                    raise ValueError("ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment")
+
+                oidc_token = oidc_cache.get_cache(key=secret_name)
+                if oidc_token is not None:
+                    return oidc_token
+
+                client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+                response = client.get(
+                    actions_id_token_request_url,
+                    params={"audience": oidc_aud},
+                    headers={
+                        "Authorization": f"Bearer {actions_id_token_request_token}",
+                        "Accept": "application/json; api-version=2.0",
+                        },
+                )
+                if response.status_code == 200:
+                    oidc_token = response.text['value']
+                    oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
+                    return oidc_token
+                else:
+                    raise ValueError("Github OIDC provider failed")
+            case _:
+                raise ValueError("Unsupported OIDC provider")
+
+
     try:
         if litellm.secret_manager_client is not None:
             try:
@@ -10380,6 +10451,27 @@ class CustomStreamWrapper:
             return {"text": "", "is_finished": False}
         except Exception as e:
             raise e
+        
+    def handle_clarifai_completion_chunk(self, chunk):
+        try:
+            if isinstance(chunk, dict):
+                parsed_response =  chunk
+            if isinstance(chunk, (str, bytes)):
+                if isinstance(chunk, bytes):
+                    parsed_response = chunk.decode("utf-8")
+                else:
+                    parsed_response = chunk
+            data_json = json.loads(parsed_response)  
+            text = data_json.get("outputs", "")[0].get("data", "").get("text", "").get("raw","")
+            prompt_tokens = len(encoding.encode(data_json.get("outputs", "")[0].get("input","").get("data", "").get("text", "").get("raw","")))
+            completion_tokens = len(encoding.encode(text))
+            return {
+                "text": text,
+                "is_finished": True,
+            }
+        except:
+            traceback.print_exc()
+            return ""
 
     def model_response_creator(self):
         model_response = ModelResponse(
@@ -10426,6 +10518,11 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+            elif (
+                self.custom_llm_provider and self.custom_llm_provider == "clarifai"
+            ):
+                response_obj = self.handle_clarifai_completion_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
