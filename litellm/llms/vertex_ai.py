@@ -158,10 +158,10 @@ class VertexAIConfig:
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and value["type"] == "json_object":
                 optional_params["response_mime_type"] = "application/json"
-            if param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
-            if param == "presence_penalty":
-                optional_params["presence_penalty"] = value
+##            if param == "frequency_penalty":
+##                optional_params["frequency_penalty"] = value
+##            if param == "presence_penalty":
+##                optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 from vertexai.preview import generative_models
 
