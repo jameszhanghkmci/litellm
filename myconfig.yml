@@ -15,7 +15,7 @@ litellm_settings:
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params: 
-      model: vertex_ai/gemini-1.0-pro
+      model: vertex_ai/gemini-pro
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_NONE
@@ -27,7 +27,7 @@ model_list:
         threshold: BLOCK_NONE
   - model_name: gemini-pro
     litellm_params: 
-      model: vertex_ai/gemini-1.0-pro
+      model: vertex_ai/gemini-pro
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_NONE
@@ -39,7 +39,7 @@ model_list:
         threshold: BLOCK_NONE
   - model_name: gemini-pro-vision
     litellm_params: 
-      model: vertex_ai/gemini-1.0-pro-vision
+      model: vertex_ai/gemini-pro-vision
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_NONE
