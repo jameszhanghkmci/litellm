@@ -102,6 +102,9 @@ blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
+### PREVIEW FEATURES ###
+enable_preview_features: bool = False
+##################
 logging: bool = True
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
@@ -740,6 +743,7 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
+from .llms.bedrock_httpx import AmazonCohereChatConfig
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,

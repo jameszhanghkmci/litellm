@@ -425,7 +425,7 @@ async def user_api_key_auth(
                     litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                 )
                 if is_allowed == False:
-                    allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes
+                    allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes  # type: ignore
                     actual_routes = get_actual_routes(allowed_routes=allowed_routes)
                     raise Exception(
                         f"Team not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
@@ -2263,10 +2263,18 @@ class ProxyConfig:
                                     _PROXY_AzureContentSafety,
                                 )
 
-                                azure_content_safety_params = litellm_settings["azure_content_safety_params"]
+                                azure_content_safety_params = litellm_settings[
+                                    "azure_content_safety_params"
+                                ]
                                 for k, v in azure_content_safety_params.items():
-                                    if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
-                                        azure_content_safety_params[k] = litellm.get_secret(v)
+                                    if (
+                                        v is not None
+                                        and isinstance(v, str)
+                                        and v.startswith("os.environ/")
+                                    ):
+                                        azure_content_safety_params[k] = (
+                                            litellm.get_secret(v)
+                                        )
 
                                 azure_content_safety_obj = _PROXY_AzureContentSafety(
                                     **azure_content_safety_params,
@@ -3656,7 +3664,7 @@ async def chat_completion(
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if data["model"] in litellm.model_alias_map:
+        if isinstance(data["model"], str) and data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -3690,6 +3698,10 @@ async def chat_completion(
         # skip router if user passed their key
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
+        elif "," in data["model"] and llm_router is not None:
+            _models_csv_string = data.pop("model")
+            _models = _models_csv_string.split(",")
+            tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
