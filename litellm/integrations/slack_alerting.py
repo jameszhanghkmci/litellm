@@ -12,7 +12,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import datetime
 from pydantic import BaseModel
 from enum import Enum
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, timezone
 from litellm.integrations.custom_logger import CustomLogger
 import random
 
@@ -32,7 +32,9 @@ class LiteLLMBase(BaseModel):
 
 class SlackAlertingArgs(LiteLLMBase):
     default_daily_report_frequency: int = 12 * 60 * 60  # 12 hours
-    daily_report_frequency: int = int(os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency))
+    daily_report_frequency: int = int(
+        os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency)
+    )
     report_check_interval: int = 5 * 60  # 5 minutes
 
 
@@ -85,6 +87,9 @@ class SlackAlerting(CustomLogger):
                 "budget_alerts",
                 "db_exceptions",
                 "daily_reports",
+                "spend_reports",
+                "cooldown_deployment",
+                "new_model_added",
             ]
         ] = [
             "llm_exceptions",
@@ -93,6 +98,9 @@ class SlackAlerting(CustomLogger):
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
+            "cooldown_deployment",
+            "new_model_added",
         ],
         alert_to_webhook_url: Optional[
             Dict
@@ -373,8 +381,10 @@ class SlackAlerting(CustomLogger):
             key=lambda i: replaced_failed_values[i],
             reverse=True,
         )[:5]
-        top_5_failed = [index for index in top_5_failed if replaced_failed_values[index] > 0]
-        
+        top_5_failed = [
+            index for index in top_5_failed if replaced_failed_values[index] > 0
+        ]
+
         # find top 5 slowest
         # Replace None values with a placeholder value (-1 in this case)
         placeholder_value = 0
@@ -389,7 +399,9 @@ class SlackAlerting(CustomLogger):
             key=lambda i: replaced_slowest_values[i],
             reverse=True,
         )[:5]
-        top_5_slowest = [index for index in top_5_slowest if replaced_slowest_values[index] > 0]
+        top_5_slowest = [
+            index for index in top_5_slowest if replaced_slowest_values[index] > 0
+        ]
 
         # format alert -> return the litellm model name + api base
         message = f"\n\nHere are today's key metrics 📈: \n\n"
@@ -720,6 +732,7 @@ Model Info:
             "budget_alerts",
             "db_exceptions",
             "daily_reports",
+            "spend_reports",
             "new_model_added",
             "cooldown_deployment",
         ],
@@ -740,6 +753,9 @@ Model Info:
             message: str - what is the alert about
         """
         if self.alerting is None:
+            return
+
+        if alert_type not in self.alert_types:
             return
 
         from datetime import datetime
@@ -847,15 +863,22 @@ Model Info:
                 value=_current_time,
             )
         else:
-            # check if current time - interval >= time last sent
-            delta = current_time - timedelta(
-                seconds=self.alerting_args.daily_report_frequency
-            )
-
+            # Check if current time - interval >= time last sent
+            delta_naive = timedelta(seconds=self.alerting_args.daily_report_frequency)
             if isinstance(report_sent, str):
                 report_sent = dt.fromisoformat(report_sent)
 
-            if delta >= report_sent:
+            # Ensure report_sent is an aware datetime object
+            if report_sent.tzinfo is None:
+                report_sent = report_sent.replace(tzinfo=timezone.utc)
+
+            # Calculate delta as an aware datetime object with the same timezone as report_sent
+            delta = report_sent - delta_naive
+
+            current_time_utc = current_time.astimezone(timezone.utc)
+            delta_utc = delta.astimezone(timezone.utc)
+
+            if current_time_utc >= delta_utc:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
@@ -929,7 +952,7 @@ Model Info:
             await self.send_alert(
                 message=_weekly_spend_message,
                 level="Low",
-                alert_type="daily_reports",
+                alert_type="spend_reports",
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)
@@ -980,7 +1003,7 @@ Model Info:
             await self.send_alert(
                 message=_spend_message,
                 level="Low",
-                alert_type="daily_reports",
+                alert_type="spend_reports",
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)
