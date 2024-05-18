@@ -84,6 +84,22 @@ model_list:
         threshold: BLOCK_ONLY_HIGH
       - category: HARM_CATEGORY_DANGEROUS_CONTENT
         threshold: BLOCK_ONLY_HIGH
+  - model_name: gemini-pro-rag
+    litellm_params: 
+      model: vertex_ai/gemini-1.0-pro-002
+      tools: 
+        retrieval:  
+          vertexAiSearch:
+            datastore: projects/james-sandbox-317709/locations/global/collections/default_collection/dataStores/test-for-rag_1716049603235
+      safety_settings:
+      - category: HARM_CATEGORY_HARASSMENT
+        threshold: BLOCK_ONLY_HIGH
+      - category: HARM_CATEGORY_HATE_SPEECH
+        threshold: BLOCK_ONLY_HIGH
+      - category: HARM_CATEGORY_SEXUALLY_EXPLICIT
+        threshold: BLOCK_ONLY_HIGH
+      - category: HARM_CATEGORY_DANGEROUS_CONTENT
+        threshold: BLOCK_ONLY_HIGH
   # - model_name: gpt-3.5-turbo
   #   litellm_params:
   #     model: azure/chatgpt-v-2
