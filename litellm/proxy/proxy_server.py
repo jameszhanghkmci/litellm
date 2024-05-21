@@ -110,6 +110,7 @@ from litellm.router import LiteLLM_Params, Deployment, updateDeployment
 from litellm.router import ModelInfo as RouterModelInfo
 from litellm._logging import verbose_router_logger, verbose_proxy_logger
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
@@ -123,6 +124,7 @@ from litellm.proxy.auth.auth_checks import (
     get_actual_routes,
 )
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.exceptions import RejectedRequestError
 
 try:
     from litellm._version import version
@@ -150,6 +152,7 @@ from fastapi.responses import (
     ORJSONResponse,
     JSONResponse,
 )
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -169,22 +172,60 @@ except Exception as e:
     except Exception as e:
         pass
 
+_license_check = LicenseCheck()
+premium_user: bool = _license_check.is_premium()
+
 ui_link = f"/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
 
+### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 _docs_url = None if os.getenv("NO_DOCS", "False") == "True" else "/"
+_title = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
+_description = (
+    os.getenv(
+        "DOCS_DESCRIPTION",
+        f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
+    )
+    if premium_user
+    else f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}"
+)
 
 app = FastAPI(
     docs_url=_docs_url,
-    title="LiteLLM API",
-    description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
+    title=_title,
+    description=_description,
     version=version,
     root_path=os.environ.get(
         "SERVER_ROOT_PATH", ""
     ),  # check if user passed root path, FastAPI defaults this value to ""
 )
+
+
+### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
+# Custom OpenAPI schema generator to include only selected routes
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    # Filter routes to include only specific ones
+    openai_routes = LiteLLMRoutes.openai_routes.value
+    paths_to_include: dict = {}
+    for route in openai_routes:
+        paths_to_include[route] = openapi_schema["paths"][route]
+    openapi_schema["paths"] = paths_to_include
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
+    app.openapi = custom_openapi  # type: ignore
 
 
 class ProxyException(Exception):
@@ -389,7 +430,10 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
     Returns:
     - None
     """
-    while True:
+
+    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
+    start_time = time.time()
+    while time.time() - start_time < 600:
         await asyncio.sleep(1)
         if await request.is_disconnected():
 
@@ -546,17 +590,15 @@ async def user_api_key_auth(
                             ttl=UserAPIKeyCacheTTLEnum.global_proxy_spend.value,
                         )
                     if global_proxy_spend is not None:
-                        user_info = {
-                            "user_id": litellm_proxy_admin_name,
-                            "max_budget": litellm.max_budget,
-                            "spend": global_proxy_spend,
-                            "user_email": "",
-                        }
+                        user_info = CallInfo(
+                            user_id=litellm_proxy_admin_name,
+                            max_budget=litellm.max_budget,
+                            spend=global_proxy_spend,
+                            token=valid_token["token"],
+                        )
                         asyncio.create_task(
                             proxy_logging_obj.budget_alerts(
-                                user_max_budget=litellm.max_budget,
-                                user_current_spend=global_proxy_spend,
-                                type="user_and_proxy_budget",
+                                type="proxy_budget",
                                 user_info=user_info,
                             )
                         )
@@ -631,15 +673,21 @@ async def user_api_key_auth(
         _end_user_object = None
         end_user_params = {}
         if "user" in request_data:
-            _end_user_object = await get_end_user_object(
-                end_user_id=request_data["user"],
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            if _end_user_object is not None:
-                end_user_params["allowed_model_region"] = (
-                    _end_user_object.allowed_model_region
+            try:
+                _end_user_object = await get_end_user_object(
+                    end_user_id=request_data["user"],
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
                 )
+                if _end_user_object is not None:
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Unable to find user in db. Error - {}".format(str(e))
+                )
+                pass
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -873,12 +921,18 @@ async def user_api_key_auth(
                                 user_max_budget is not None
                                 and user_current_spend is not None
                             ):
+                                call_info = CallInfo(
+                                    token=valid_token.token,
+                                    spend=user_current_spend,
+                                    max_budget=user_max_budget,
+                                    user_id=_user.get("user_id", None),
+                                    user_email=_user.get("user_email", None),
+                                    key_alias=valid_token.key_alias,
+                                )
                                 asyncio.create_task(
                                     proxy_logging_obj.budget_alerts(
-                                        user_max_budget=user_max_budget,
-                                        user_current_spend=user_current_spend,
-                                        type="user_and_proxy_budget",
-                                        user_info=_user,
+                                        type="user_budget",
+                                        user_info=call_info,
                                     )
                                 )
 
@@ -898,12 +952,20 @@ async def user_api_key_auth(
                             user_max_budget is not None
                             and user_current_spend is not None
                         ):
+                            call_info = CallInfo(
+                                token=valid_token.token,
+                                spend=user_current_spend,
+                                max_budget=user_max_budget,
+                                user_id=getattr(user_id_information, "user_id", None),
+                                user_email=getattr(
+                                    user_id_information, "user_email", None
+                                ),
+                                key_alias=valid_token.key_alias,
+                            )
                             asyncio.create_task(
                                 proxy_logging_obj.budget_alerts(
-                                    user_max_budget=user_max_budget,
-                                    user_current_spend=user_current_spend,
                                     type="user_budget",
-                                    user_info=user_id_information,
+                                    user_info=call_info,
                                 )
                             )
 
@@ -933,12 +995,17 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
-                        user_max_budget=valid_token.max_budget,
-                        user_current_spend=valid_token.spend,
                         type="token_budget",
-                        user_info=valid_token,
+                        user_info=call_info,
                     )
                 )
 
@@ -983,39 +1050,24 @@ async def user_api_key_auth(
                         raise Exception(
                             f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
                         )
-            # Check 6. Token spend is under Team budget
-            if (
-                valid_token.spend is not None
-                and hasattr(valid_token, "team_max_budget")
-                and valid_token.team_max_budget is not None
-            ):
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        user_max_budget=valid_token.team_max_budget,
-                        user_current_spend=valid_token.spend,
-                        type="token_budget",
-                        user_info=valid_token,
-                    )
-                )
 
-                if valid_token.spend >= valid_token.team_max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Team: {valid_token.team_max_budget}"
-                    )
-
-            # Check 7. Team spend is under Team budget
+            # Check 6. Team spend is under Team budget
             if (
                 hasattr(valid_token, "team_spend")
                 and valid_token.team_spend is not None
                 and hasattr(valid_token, "team_max_budget")
                 and valid_token.team_max_budget is not None
             ):
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.team_spend,
+                    max_budget=valid_token.team_max_budget,
+                    user_id=valid_token.user_id,
+                )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
-                        user_max_budget=valid_token.team_max_budget,
-                        user_current_spend=valid_token.team_spend,
-                        type="token_budget",
-                        user_info=valid_token,
+                        type="team_budget",
+                        user_info=call_info,
                     )
                 )
 
@@ -1061,18 +1113,17 @@ async def user_api_key_auth(
                     )
 
                 if global_proxy_spend is not None:
-                    user_info = {
-                        "user_id": litellm_proxy_admin_name,
-                        "max_budget": litellm.max_budget,
-                        "spend": global_proxy_spend,
-                        "user_email": "",
-                    }
+                    call_info = CallInfo(
+                        token=valid_token.token,
+                        spend=global_proxy_spend,
+                        max_budget=litellm.max_budget,
+                        user_id=litellm_proxy_admin_name,
+                        team_id=valid_token.team_id,
+                    )
                     asyncio.create_task(
                         proxy_logging_obj.budget_alerts(
-                            user_max_budget=litellm.max_budget,
-                            user_current_spend=global_proxy_spend,
-                            type="user_and_proxy_budget",
-                            user_info=user_info,
+                            type="proxy_budget",
+                            user_info=call_info,
                         )
                     )
             _ = common_checks(
@@ -1464,13 +1515,8 @@ async def _PROXY_track_cost_callback(
         model = kwargs.get("model", "")
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
         error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
-        user_id = user_id or "not-found"
         asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                user_max_budget=0,
-                user_current_spend=0,
-                type="failed_tracking",
-                user_info=user_id,
+            proxy_logging_obj.failed_tracking_alert(
                 error_message=error_msg,
             )
         )
@@ -1682,14 +1728,14 @@ async def update_cache(
     """
 
     ### UPDATE KEY SPEND ###
-    async def _update_key_cache():
+    async def _update_key_cache(token: str, response_cost: float):
         # Fetch the existing cost for the given token
         if isinstance(token, str) and token.startswith("sk-"):
             hashed_token = hash_token(token=token)
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
+        existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
         )
@@ -1698,7 +1744,7 @@ async def update_cache(
         )
         if existing_spend_obj is None:
             existing_spend = 0
-            existing_spend_obj = LiteLLM_VerificationTokenView()
+            existing_spend_obj = LiteLLM_VerificationTokenView(token=token)
         else:
             existing_spend = existing_spend_obj.spend
         # Calculate the new cost by adding the existing cost and response_cost
@@ -1712,29 +1758,36 @@ async def update_cache(
             and (
                 _is_projected_spend_over_limit(
                     current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                    soft_budget_limit=existing_spend_obj.litellm_budget_table[
+                        "soft_budget"
+                    ],
                 )
                 == True
             )
         ):
-            key_alias = existing_spend_obj.key_alias
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.soft_budget,
+                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
+                    "soft_budget", None
+                ),
+            )  # type: ignore
+            soft_limit = existing_spend_obj.litellm_budget_table.get(
+                "soft_budget", float("inf")
             )
-            soft_limit = existing_spend_obj.litellm_budget_table.soft_budget
-            user_info = {
-                "key_alias": key_alias,
-                "projected_spend": projected_spend,
-                "projected_exceeded_date": projected_exceeded_date,
-            }
+            call_info = CallInfo(
+                token=existing_spend_obj.token or "",
+                spend=new_spend,
+                key_alias=existing_spend_obj.key_alias,
+                max_budget=soft_limit,
+                user_id=existing_spend_obj.user_id,
+                projected_spend=projected_spend,
+                projected_exceeded_date=projected_exceeded_date,
+            )
             # alert user
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
                     type="projected_limit_exceeded",
-                    user_info=user_info,
-                    user_max_budget=soft_limit,
-                    user_current_spend=new_spend,
+                    user_info=call_info,
                 )
             )
             # set cooldown on alert
@@ -1744,7 +1797,7 @@ async def update_cache(
             existing_spend_obj is not None
             and getattr(existing_spend_obj, "team_spend", None) is not None
         ):
-            existing_team_spend = existing_spend_obj.team_spend
+            existing_team_spend = existing_spend_obj.team_spend or 0
             # Calculate the new cost by adding the existing cost and response_cost
             existing_spend_obj.team_spend = existing_team_spend + response_cost
 
@@ -1861,8 +1914,8 @@ async def update_cache(
                 f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
             )
 
-    if token is not None:
-        asyncio.create_task(_update_key_cache())
+    if token is not None and response_cost is not None:
+        asyncio.create_task(_update_key_cache(token=token, response_cost=response_cost))
 
     asyncio.create_task(_update_user_cache())
 
@@ -2557,6 +2610,11 @@ class ProxyConfig:
 
         Return model info w/ id
         """
+        _id: Optional[str] = getattr(model, "model_id", None)
+        if _id is not None:
+            model.model_info["id"] = _id
+            model.model_info["db_model"] = True
+
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
@@ -3592,7 +3650,6 @@ async def chat_completion(
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     data = {}
-    check_request_disconnected = None
     try:
         body = await request.body()
         body_str = body.decode()
@@ -3710,8 +3767,8 @@ async def chat_completion(
 
         data["litellm_logging_obj"] = logging_obj
 
-        ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
+        ### CALL HOOKS ### - modify/reject incoming data before calling the model
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
         )
 
@@ -3775,9 +3832,6 @@ async def chat_completion(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        check_request_disconnected = asyncio.create_task(
-            check_request_disconnection(request, llm_responses)
-        )
         responses = await llm_responses
 
         response = responses[1]
@@ -3829,6 +3883,40 @@ async def chat_completion(
         )
 
         return response
+    except RejectedRequestError as e:
+        _data = e.request_data
+        _data["litellm_status"] = "fail"  # used for alerting
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        _chat_response = litellm.ModelResponse()
+        _chat_response.choices[0].message.content = e.message  # type: ignore
+
+        if data.get("stream", None) is not None and data["stream"] == True:
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.CustomStreamWrapper(
+                completion_stream=_iterator,
+                model=data.get("model", ""),
+                custom_llm_provider="cached_response",
+                logging_obj=data.get("litellm_logging_obj", None),
+            )
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+            )
+        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        _chat_response.usage = _usage  # type: ignore
+        return _chat_response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         traceback.print_exc()
@@ -3859,9 +3947,6 @@ async def chat_completion(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
-    finally:
-        if check_request_disconnected is not None:
-            check_request_disconnected.cancel()
 
 
 @router.post(
@@ -3888,7 +3973,6 @@ async def completion(
 ):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
-    check_request_disconnected = None
     try:
         body = await request.body()
         body_str = body.decode()
@@ -3947,8 +4031,8 @@ async def completion(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
         )
 
         ### ROUTE THE REQUESTs ###
@@ -3988,9 +4072,6 @@ async def completion(
                     + data.get("model", "")
                 },
             )
-        check_request_disconnected = asyncio.create_task(
-            check_request_disconnection(request, llm_response)
-        )
 
         # Await the llm_response task
         response = await llm_response
@@ -4034,6 +4115,46 @@ async def completion(
         )
 
         return response
+    except RejectedRequestError as e:
+        _data = e.request_data
+        _data["litellm_status"] = "fail"  # used for alerting
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        if _data.get("stream", None) is not None and _data["stream"] == True:
+            _chat_response = litellm.ModelResponse()
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _chat_response.usage = _usage  # type: ignore
+            _chat_response.choices[0].message.content = e.message  # type: ignore
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.TextCompletionStreamWrapper(
+                completion_stream=_iterator,
+                model=_data.get("model", ""),
+            )
+
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                headers={},
+            )
+        else:
+            _response = litellm.TextCompletionResponse()
+            _response.choices[0].text = e.message
+            return _response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
@@ -4055,9 +4176,6 @@ async def completion(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
-    finally:
-        if check_request_disconnected is not None:
-            check_request_disconnected.cancel()
 
 
 @router.post(
@@ -4838,6 +4956,9 @@ async def moderations(
             )
 
 
+#### DEV UTILS ####
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -4874,11 +4995,12 @@ async def token_counter(request: TokenCountRequest):
     model_to_use = (
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
-    total_tokens, tokenizer_used = token_counter(
+    _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use)
+    tokenizer_used = str(_tokenizer_used["type"])
+    total_tokens = token_counter(
         model=model_to_use,
         text=prompt,
         messages=messages,
-        return_tokenizer_used=True,
     )
     return TokenCountResponse(
         total_tokens=total_tokens,
@@ -4886,6 +5008,36 @@ async def token_counter(request: TokenCountRequest):
         model_used=model_to_use,
         tokenizer_type=tokenizer_used,
     )
+
+
+@router.get(
+    "/utils/supported_openai_params",
+    tags=["llm utils"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def supported_openai_params(model: str):
+    """
+    Returns supported openai params for a given litellm model name 
+
+    e.g. `gpt-4` vs `gpt-3.5-turbo` 
+
+    Example curl: 
+    ```
+    curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        return {
+            "supported_openai_params": litellm.get_supported_openai_params(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail={"error": "Could not map model={}".format(model)}
+        )
 
 
 #### KEY MANAGEMENT ####
@@ -5788,6 +5940,8 @@ async def calculate_spend(request: Request):
     Accepts all the params of completion_cost.
 
     Calculate spend **before** making call:
+
+    Note: If you see a spend of $0.0 you need to set custom_pricing for your model: https://docs.litellm.ai/docs/proxy/custom_pricing
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
@@ -7368,6 +7522,11 @@ async def update_team(
     existing_team_row = await prisma_client.get_data(
         team_id=data.team_id, table_name="team", query_type="find_unique"
     )
+    if existing_team_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     updated_kv = data.json(exclude_none=True)
     team_row = await prisma_client.update_data(
@@ -7621,6 +7780,17 @@ async def delete_team(
     if data.team_ids is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
+    # check that all teams passed exist
+    for team_id in data.team_ids:
+        team_row = await prisma_client.get_data(  # type: ignore
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if team_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team not found, passed team_id={team_id}"},
+            )
+
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
     ## DELETE TEAMS
@@ -7668,6 +7838,12 @@ async def team_info(
         team_info = await prisma_client.get_data(
             team_id=team_id, table_name="team", query_type="find_unique"
         )
+        if team_info is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": f"Team not found, passed team id: {team_id}."},
+            )
+
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
             team_id=team_id,
@@ -8088,6 +8264,7 @@ async def add_new_model(
                     await proxy_logging_obj.slack_alerting_instance.model_added_alert(
                         model_name=model_params.model_name,
                         litellm_model_name=_orignal_litellm_model_name,
+                        passed_model_info=model_params.model_info,
                     )
             except:
                 pass
@@ -8899,9 +9076,25 @@ async def google_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
+    global premium_user
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+
+    ####### Check if user is a Enterprise / Premium User #######
+    if (
+        microsoft_client_id is not None
+        or google_client_id is not None
+        or generic_client_id is not None
+    ):
+        if premium_user != True:
+            raise ProxyException(
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                type="auth_error",
+                param="premium_user",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+
     # get url from request
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
     ui_username = os.getenv("UI_USERNAME")
@@ -10103,7 +10296,7 @@ async def test_endpoint(request: Request):
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: Literal[
-        "slack_budget_alerts", "langfuse", "slack", "openmeter"
+        "slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook"
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
@@ -10118,7 +10311,13 @@ async def health_services_endpoint(
             raise HTTPException(
                 status_code=400, detail={"error": "Service must be specified."}
             )
-        if service not in ["slack_budget_alerts", "langfuse", "slack", "openmeter"]:
+        if service not in [
+            "slack_budget_alerts",
+            "langfuse",
+            "slack",
+            "openmeter",
+            "webhook",
+        ]:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -10153,6 +10352,20 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
             }
+
+        if service == "webhook":
+            user_info = CallInfo(
+                token=user_api_key_dict.token or "",
+                spend=1,
+                max_budget=0,
+                user_id=user_api_key_dict.user_id,
+                key_alias=user_api_key_dict.key_alias,
+                team_id=user_api_key_dict.team_id,
+            )
+            await proxy_logging_obj.budget_alerts(
+                type="user_budget",
+                user_info=user_info,
+            )
 
         if service == "slack" or service == "slack_budget_alerts":
             if "slack" in general_settings.get("alerting", []):
@@ -10229,6 +10442,7 @@ async def health_services_endpoint(
                     },
                 )
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
