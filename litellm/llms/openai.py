@@ -157,6 +157,102 @@ class MistralConfig:
                 )
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
+            if param == "response_format":
+                optional_params["response_format"] = value
+        return optional_params
+
+
+class DeepInfraConfig:
+    """
+    Reference: https://deepinfra.com/docs/advanced/openai_api
+
+    The class `DeepInfra` provides configuration for the DeepInfra's Chat Completions API interface. Below are the parameters:
+    """
+
+    frequency_penalty: Optional[int] = None
+    function_call: Optional[Union[str, dict]] = None
+    functions: Optional[list] = None
+    logit_bias: Optional[dict] = None
+    max_tokens: Optional[int] = None
+    n: Optional[int] = None
+    presence_penalty: Optional[int] = None
+    stop: Optional[Union[str, list]] = None
+    temperature: Optional[int] = None
+    top_p: Optional[int] = None
+    response_format: Optional[dict] = None
+    tools: Optional[list] = None
+    tool_choice: Optional[Union[str, dict]] = None
+
+    def __init__(
+        self,
+        frequency_penalty: Optional[int] = None,
+        function_call: Optional[Union[str, dict]] = None,
+        functions: Optional[list] = None,
+        logit_bias: Optional[dict] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[int] = None,
+        stop: Optional[Union[str, list]] = None,
+        temperature: Optional[int] = None,
+        top_p: Optional[int] = None,
+        response_format: Optional[dict] = None,
+        tools: Optional[list] = None,
+        tool_choice: Optional[Union[str, dict]] = None,
+    ) -> None:
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "stream",
+            "frequency_penalty",
+            "function_call",
+            "functions",
+            "logit_bias",
+            "max_tokens",
+            "n",
+            "presence_penalty",
+            "stop",
+            "temperature",
+            "top_p",
+            "response_format",
+            "tools",
+            "tool_choice",
+        ]
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ):
+        supported_openai_params = self.get_supported_openai_params()
+        for param, value in non_default_params.items():
+            if (
+                param == "temperature"
+                and value == 0
+                and model == "mistralai/Mistral-7B-Instruct-v0.1"
+            ):  # this model does no support temperature == 0
+                value = 0.0001  # close to 0
+            if param in supported_openai_params:
+                optional_params[param] = value
         return optional_params
 
 
@@ -197,6 +293,7 @@ class OpenAIConfig:
     stop: Optional[Union[str, list]] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
+    response_format: Optional[dict] = None
 
     def __init__(
         self,
@@ -210,6 +307,7 @@ class OpenAIConfig:
         stop: Optional[Union[str, list]] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
+        response_format: Optional[dict] = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -404,6 +502,7 @@ class OpenAIChatCompletion(BaseLLM):
         self,
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],
+        optional_params: dict,
         model: Optional[str] = None,
         messages: Optional[list] = None,
         print_verbose: Optional[Callable] = None,
@@ -411,7 +510,6 @@ class OpenAIChatCompletion(BaseLLM):
         api_base: Optional[str] = None,
         acompletion: bool = False,
         logging_obj=None,
-        optional_params=None,
         litellm_params=None,
         logger_fn=None,
         headers: Optional[dict] = None,
@@ -795,10 +893,10 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         input: list,
         timeout: float,
+        logging_obj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         model_response: Optional[litellm.utils.EmbeddingResponse] = None,
-        logging_obj=None,
         optional_params=None,
         client=None,
         aembedding=None,
