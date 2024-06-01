@@ -1,4 +1,4 @@
-import httpx, asyncio
+import httpx, asyncio, traceback
 from typing import Optional, Union, Mapping, Any
 
 # https://www.python-httpx.org/advanced/timeouts
@@ -43,15 +43,22 @@ class AsyncHTTPHandler:
         self,
         url: str,
         data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
     ):
-        req = self.client.build_request(
-            "POST", url, data=data, params=params, headers=headers  # type: ignore
-        )
-        response = await self.client.send(req, stream=stream)
-        return response
+        try:
+            req = self.client.build_request(
+                "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+            )
+            response = await self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as e:
+            raise
+        except Exception as e:
+            raise
 
     def __del__(self) -> None:
         try:

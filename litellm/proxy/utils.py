@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     WebhookEvent,
     AlertType,
     ResetTeamBudgetRequest,
+    LitellmUserRoles,
 )
 from litellm.caching import DualCache, RedisCache
 from litellm.router import Deployment, ModelInfo, LiteLLM_Params
@@ -2637,7 +2638,7 @@ def _is_user_proxy_admin(user_id_information: Optional[list]):
     _user = user_id_information[0]
     if (
         _user.get("user_role", None) is not None
-        and _user.get("user_role") == "proxy_admin"
+        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
@@ -2650,11 +2651,22 @@ def _is_user_proxy_admin(user_id_information: Optional[list]):
 
     if (
         _user.get("user_role", None) is not None
-        and _user.get("user_role") == "proxy_admin"
+        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
     return False
+
+
+def _get_user_role(user_id_information: Optional[list]):
+    if user_id_information is None:
+        return None
+
+    if len(user_id_information) == 0 or user_id_information[0] is None:
+        return None
+
+    _user = user_id_information[0]
+    return _user.get("user_role")
 
 
 def encrypt_value(value: str, master_key: str):
