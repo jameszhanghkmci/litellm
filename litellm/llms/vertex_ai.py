@@ -40,8 +40,8 @@ class ExtendedGenerationConfig(dict):
         max_output_tokens: Optional[int] = None,
         stop_sequences: Optional[List[str]] = None,
         response_mime_type: Optional[str] = None,
-##        frequency_penalty: Optional[float] = None,
-##        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ):
         super().__init__(
             temperature=temperature,
@@ -51,8 +51,8 @@ class ExtendedGenerationConfig(dict):
             max_output_tokens=max_output_tokens,
             stop_sequences=stop_sequences,
             response_mime_type=response_mime_type,
-##            frequency_penalty=frequency_penalty,
-##            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
         )
 
 
@@ -91,8 +91,8 @@ class VertexAIConfig:
     response_mime_type: Optional[str] = None
     candidate_count: Optional[int] = None
     stop_sequences: Optional[list] = None
-##    frequency_penalty: Optional[float] = None
-##    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
 
     def __init__(
         self,
@@ -103,8 +103,8 @@ class VertexAIConfig:
         response_mime_type: Optional[str] = None,
         candidate_count: Optional[int] = None,
         stop_sequences: Optional[list] = None,
-##        frequency_penalty: Optional[float] = None,
-##        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -163,37 +163,25 @@ class VertexAIConfig:
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and value["type"] == "json_object":
                 optional_params["response_mime_type"] = "application/json"
-##            if param == "frequency_penalty":
-##                optional_params["frequency_penalty"] = value
-##            if param == "presence_penalty":
-##                optional_params["presence_penalty"] = value
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 from vertexai.preview import generative_models
 
                 gtool_func_declarations = []
                 for tool in value:
-                    if "vertexAiSearch" in tool.get("retrieval", {}):
-                        # Handle Vertex AI Search tool
-                        search_config = tool["retrieval"]["vertexAiSearch"]
-                        datastore = search_config.get("datastore")
-                        if not datastore:
-                            raise ValueError(
-                                "Vertex AI Search tool requires a 'datastore' field."
-                            )
-                        optional_params["vertex_ai_search_datastore"] = datastore
-                    else:
-                        # Handle other tool types (e.g., function calling)
-                        gtool_func_declaration = generative_models.FunctionDeclaration(
-                            name=tool["function"]["name"],
-                            description=tool["function"].get("description", ""),
-                            parameters=tool["function"].get("parameters", {}),
-                        )
-                        gtool_func_declarations.append(gtool_func_declaration)
-                if gtool_func_declarations:
-                    optional_params["tools"] = [
-                        generative_models.Tool(
-                            function_declarations=gtool_func_declarations
-                        )
+                    gtool_func_declaration = generative_models.FunctionDeclaration(
+                        name=tool["function"]["name"],
+                        description=tool["function"].get("description", ""),
+                        parameters=tool["function"].get("parameters", {}),
+                    )
+                    gtool_func_declarations.append(gtool_func_declaration)
+                optional_params["tools"] = [
+                    generative_models.Tool(
+                        function_declarations=gtool_func_declarations
+                    )
                 ]
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
@@ -791,9 +779,6 @@ def completion(
                 generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
-                vertex_ai_search_datastore=optional_params.get(
-                    "vertex_ai_search_datastore"
-                ),  # Pass datastore to the call
             )
 
             if tools is not None and bool(
@@ -1073,9 +1058,6 @@ async def async_completion(
                 generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
-                vertex_ai_search_datastore=optional_params.get(
-                    "vertex_ai_search_datastore"
-                ),  # Pass datastore to the call
             )
 
             _cache_key = _get_client_cache_key(
