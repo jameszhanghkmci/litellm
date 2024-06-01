@@ -84,13 +84,9 @@ model_list:
         threshold: BLOCK_ONLY_HIGH
       - category: HARM_CATEGORY_DANGEROUS_CONTENT
         threshold: BLOCK_ONLY_HIGH
-  - model_name: gemini-pro-rag
+  - model_name: gemini-1.5-flash-latest
     litellm_params: 
-      model: vertex_ai/gemini-1.0-pro-002
-      tools: 
-        retrieval:  
-          vertexAiSearch:
-            datastore: projects/james-sandbox-317709/locations/global/collections/default_collection/dataStores/test-for-rag_1716049603235
+      model: vertex_ai/gemini-1.5-flash-preview-0514
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_ONLY_HIGH
@@ -148,6 +144,7 @@ litellm_settings:
   #vertex_project: "" # Your Project ID
   vertex_location: "asia-northeast1" # proj location
   drop_params: True
+  add_function_to_prompt: True
   max_budget: 100 
   budget_duration: 30d
   num_retries: 1
