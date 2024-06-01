@@ -172,16 +172,28 @@ class VertexAIConfig:
 
                 gtool_func_declarations = []
                 for tool in value:
-                    gtool_func_declaration = generative_models.FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    generative_models.Tool(
-                        function_declarations=gtool_func_declarations
-                    )
+                    if "vertexAiSearch" in tool.get("retrieval", {}):
+                        # Handle Vertex AI Search tool
+                        search_config = tool["retrieval"]["vertexAiSearch"]
+                        datastore = search_config.get("datastore")
+                        if not datastore:
+                            raise ValueError(
+                                "Vertex AI Search tool requires a 'datastore' field."
+                            )
+                        optional_params["vertex_ai_search_datastore"] = datastore
+                    else:
+                        # Handle other tool types (e.g., function calling)
+                        gtool_func_declaration = generative_models.FunctionDeclaration(
+                            name=tool["function"]["name"],
+                            description=tool["function"].get("description", ""),
+                            parameters=tool["function"].get("parameters", {}),
+                        )
+                        gtool_func_declarations.append(gtool_func_declaration)
+                if gtool_func_declarations:
+                    optional_params["tools"] = [
+                        generative_models.Tool(
+                            function_declarations=gtool_func_declarations
+                        )
                 ]
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
@@ -779,6 +791,9 @@ def completion(
                 generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
+                vertex_ai_search_datastore=optional_params.get(
+                    "vertex_ai_search_datastore"
+                ),  # Pass datastore to the call
             )
 
             if tools is not None and bool(
@@ -1058,6 +1073,9 @@ async def async_completion(
                 generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
+                vertex_ai_search_datastore=optional_params.get(
+                    "vertex_ai_search_datastore"
+                ),  # Pass datastore to the call
             )
 
             _cache_key = _get_client_cache_key(
