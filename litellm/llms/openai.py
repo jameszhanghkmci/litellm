@@ -515,6 +515,7 @@ class OpenAIChatCompletion(BaseLLM):
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
     ):
+        args = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -532,7 +533,7 @@ class OpenAIChatCompletion(BaseLLM):
                 # Hexadecimal representation of the hash
                 hashed_api_key = hash_object.hexdigest()
 
-            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization}"
+            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization},is_async={is_async}"
 
             if _cache_key in litellm.in_memory_llm_clients_cache:
                 return litellm.in_memory_llm_clients_cache[_cache_key]
@@ -555,6 +556,7 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
 
+            ## SAVE CACHE KEY
             litellm.in_memory_llm_clients_cache[_cache_key] = _new_client
             return _new_client
 
@@ -2086,7 +2088,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     async def a_add_message(
         self,
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2121,7 +2123,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2136,7 +2138,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2152,7 +2154,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self,
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2532,6 +2534,56 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         return response
 
+    def async_run_thread_stream(
+        self,
+        client: AsyncOpenAI,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        tools: Optional[Iterable[AssistantToolParam]],
+        event_handler: Optional[AssistantEventHandler],
+    ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
+        data = {
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "additional_instructions": additional_instructions,
+            "instructions": instructions,
+            "metadata": metadata,
+            "model": model,
+            "tools": tools,
+        }
+        if event_handler is not None:
+            data["event_handler"] = event_handler
+        return client.beta.threads.runs.stream(**data)  # type: ignore
+
+    def run_thread_stream(
+        self,
+        client: OpenAI,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        tools: Optional[Iterable[AssistantToolParam]],
+        event_handler: Optional[AssistantEventHandler],
+    ) -> AssistantStreamManager[AssistantEventHandler]:
+        data = {
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "additional_instructions": additional_instructions,
+            "instructions": instructions,
+            "metadata": metadata,
+            "model": model,
+            "tools": tools,
+        }
+        if event_handler is not None:
+            data["event_handler"] = event_handler
+        return client.beta.threads.runs.stream(**data)  # type: ignore
+
     # fmt: off
 
     @overload
@@ -2550,8 +2602,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         organization: Optional[str],
-        client: Optional[AsyncOpenAI],
+        client,
         arun_thread: Literal[True], 
+        event_handler: Optional[AssistantEventHandler],
     ) -> Coroutine[None, None, Run]:
         ...
 
@@ -2571,8 +2624,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         organization: Optional[str],
-        client: Optional[OpenAI],
+        client,
         arun_thread: Optional[Literal[False]], 
+        event_handler: Optional[AssistantEventHandler],
     ) -> Run: 
         ...
 
@@ -2595,8 +2649,29 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client=None,
         arun_thread=None,
+        event_handler: Optional[AssistantEventHandler] = None,
     ):
         if arun_thread is not None and arun_thread == True:
+            if stream is not None and stream == True:
+                _client = self.async_get_openai_client(
+                    api_key=api_key,
+                    api_base=api_base,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    organization=organization,
+                    client=client,
+                )
+                return self.async_run_thread_stream(
+                    client=_client,
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                    additional_instructions=additional_instructions,
+                    instructions=instructions,
+                    metadata=metadata,
+                    model=model,
+                    tools=tools,
+                    event_handler=event_handler,
+                )
             return self.arun_thread(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
@@ -2621,6 +2696,19 @@ class OpenAIAssistantsAPI(BaseLLM):
             organization=organization,
             client=client,
         )
+
+        if stream is not None and stream == True:
+            return self.run_thread_stream(
+                client=openai_client,
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
 
         response = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
             thread_id=thread_id,

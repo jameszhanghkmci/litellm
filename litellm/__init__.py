@@ -60,6 +60,7 @@ _async_failure_callback: List[Callable] = (
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 
 email: Optional[str] = (
@@ -102,6 +103,7 @@ common_cloud_provider_auth_params: dict = {
 }
 use_client: bool = False
 ssl_verify: bool = True
+ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
 ### GUARDRAILS ###
@@ -214,7 +216,6 @@ add_function_to_prompt: bool = (
 )
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
-module_level_aclient = AsyncHTTPHandler()
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
@@ -231,6 +232,7 @@ max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
+module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
@@ -782,7 +784,11 @@ from .llms.openai import (
     MistralConfig,
     DeepInfraConfig,
 )
-from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
+from .llms.azure import (
+    AzureOpenAIConfig,
+    AzureOpenAIError,
+    AzureOpenAIAssistantsAPIConfig,
+)
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *
@@ -802,6 +808,7 @@ from .exceptions import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
@@ -809,3 +816,4 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .scheduler import *
+from .cost_calculator import response_cost_calculator

@@ -76,6 +76,17 @@ class LitellmUserRoles(str, enum.Enum):
         return ui_labels.get(self.value, "")
 
 
+class LitellmTableNames(str, enum.Enum):
+    """
+    Enum for Table Names used by LiteLLM
+    """
+
+    TEAM_TABLE_NAME: str = "LiteLLM_TeamTable"
+    USER_TABLE_NAME: str = "LiteLLM_UserTable"
+    KEY_TABLE_NAME: str = "LiteLLM_VerificationToken"
+    PROXY_MODEL_TABLE_NAME: str = "LiteLLM_ModelTable"
+
+
 AlertType = Literal[
     "llm_exceptions",
     "llm_too_slow",
@@ -190,6 +201,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
+        "/model_group/info",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -260,6 +272,13 @@ class LiteLLMRoutes(enum.Enum):
         "/config/yaml",
         "/metrics",
     ]
+
+    internal_user_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+    ] + spend_tracking_routes
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -1268,6 +1287,22 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
     endTime: Union[str, datetime, None]
 
 
+class LiteLLM_AuditLogs(LiteLLMBase):
+    id: str
+    updated_at: datetime
+    changed_by: str
+    action: Literal["created", "updated", "deleted"]
+    table_name: Literal[
+        LitellmTableNames.TEAM_TABLE_NAME,
+        LitellmTableNames.USER_TABLE_NAME,
+        LitellmTableNames.KEY_TABLE_NAME,
+        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+    ]
+    object_id: str
+    before_value: Optional[Json] = None
+    updated_values: Optional[Json] = None
+
+
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
 
@@ -1343,6 +1378,70 @@ class InvitationModel(LiteLLMBase):
     updated_by: str
 
 
+class InvitationClaim(LiteLLMBase):
+    invitation_link: str
+    user_id: str
+    password: str
+
+
 class ConfigFieldInfo(LiteLLMBase):
     field_name: str
     field_value: Any
+
+
+class CallbackOnUI(LiteLLMBase):
+    litellm_callback_name: str
+    litellm_callback_params: Optional[list]
+    ui_callback_name: str
+
+
+class AllCallbacks(LiteLLMBase):
+    langfuse: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="langfuse",
+        ui_callback_name="Langfuse",
+        litellm_callback_params=[
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+        ],
+    )
+
+    otel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="otel",
+        ui_callback_name="OpenTelemetry",
+        litellm_callback_params=[
+            "OTEL_EXPORTER",
+            "OTEL_ENDPOINT",
+            "OTEL_HEADERS",
+        ],
+    )
+
+    s3: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="s3",
+        ui_callback_name="s3 Bucket (AWS)",
+        litellm_callback_params=[
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+        ],
+    )
+
+    openmeter: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="openmeter",
+        ui_callback_name="OpenMeter",
+        litellm_callback_params=[
+            "OPENMETER_API_ENDPOINT",
+            "OPENMETER_API_KEY",
+        ],
+    )
+
+    custom_callback_api: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="custom_callback_api",
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
+        ui_callback_name="Custom Callback API",
+    )
+
+    datadog: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="datadog",
+        litellm_callback_params=["DD_API_KEY", "DD_SITE"],
+        ui_callback_name="Datadog",
+    )

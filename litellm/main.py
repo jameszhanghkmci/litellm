@@ -14,6 +14,7 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
+
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -223,7 +224,7 @@ async def acompletion(
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     **kwargs,
-):
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
 
@@ -339,6 +340,8 @@ async def acompletion(
             if isinstance(init_response, dict) or isinstance(
                 init_response, ModelResponse
             ):  ## CACHING SCENARIO
+                if isinstance(init_response, dict):
+                    response = ModelResponse(**init_response)
                 response = init_response
             elif asyncio.iscoroutine(init_response):
                 response = await init_response
@@ -835,6 +838,7 @@ def completion(
             logprobs=logprobs,
             top_logprobs=top_logprobs,
             extra_headers=extra_headers,
+            api_version=api_version,
             **non_default_params,
         )
 
@@ -2411,6 +2415,7 @@ def completion(
                         "top_k": kwargs.get("top_k", 40),
                     },
                 },
+                verify=litellm.ssl_verify,
             )
             response_json = resp.json()
             """
@@ -3720,7 +3725,7 @@ async def amoderation(input: str, model: str, api_key: Optional[str] = None, **k
 
 ##### Image Generation #######################
 @client
-async def aimage_generation(*args, **kwargs):
+async def aimage_generation(*args, **kwargs) -> ImageResponse:
     """
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
@@ -3753,6 +3758,8 @@ async def aimage_generation(*args, **kwargs):
         if isinstance(init_response, dict) or isinstance(
             init_response, ImageResponse
         ):  ## CACHING SCENARIO
+            if isinstance(init_response, dict):
+                init_response = ImageResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
@@ -3788,7 +3795,7 @@ def image_generation(
     litellm_logging_obj=None,
     custom_llm_provider=None,
     **kwargs,
-):
+) -> ImageResponse:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -4120,7 +4127,7 @@ def transcription(
             or litellm.api_key
             or litellm.azure_key
             or get_secret("AZURE_API_KEY")
-        )
+        )  # type: ignore
 
         response = azure_chat_completions.audio_transcriptions(
             model=model,
@@ -4329,6 +4336,10 @@ async def ahealth_check(
             mode = litellm.model_cost[model]["mode"]
 
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+
+        if model in litellm.model_cost and mode is None:
+            mode = litellm.model_cost[model]["mode"]
+
         mode = mode or "chat"  # default to chat completion calls
 
         if custom_llm_provider == "azure":
@@ -4525,7 +4536,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
 
 def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
-):
+) -> Union[ModelResponse, TextCompletionResponse]:
     model_response = litellm.ModelResponse()
     ### SORT CHUNKS BASED ON CREATED ORDER ##
     print_verbose("Goes into checking if chunk has hiddden created at param")
