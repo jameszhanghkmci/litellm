@@ -1,24 +1,27 @@
-from typing import Optional, Union, Any
-import types, requests  # type: ignore
-from .base import BaseLLM
-from litellm.utils import (
-    ModelResponse,
-    Choices,
-    Message,
-    CustomStreamWrapper,
-    convert_to_model_response_object,
-    TranscriptionResponse,
-    TextCompletionResponse,
-)
-from typing import Callable, Optional, BinaryIO
-from litellm import OpenAIConfig
-import litellm, json
-import httpx
-from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
-from openai import AzureOpenAI, AsyncAzureOpenAI
-from ..llms.openai import OpenAITextCompletion, OpenAITextCompletionConfig
+import json
+import types  # type: ignore
 import uuid
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from typing import Any, Callable, Optional, Union
+
+import httpx
+import requests
+from openai import AsyncAzureOpenAI, AzureOpenAI
+
+import litellm
+from litellm import OpenAIConfig
+from litellm.utils import (
+    Choices,
+    CustomStreamWrapper,
+    Message,
+    ModelResponse,
+    TextCompletionResponse,
+    TranscriptionResponse,
+    convert_to_model_response_object,
+)
+
+from .base import BaseLLM
+from .OpenAI.openai import OpenAITextCompletion, OpenAITextCompletionConfig
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 
@@ -30,9 +33,11 @@ class AzureOpenAIError(Exception):
         message,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
+        headers: Optional[httpx.Headers] = None,
     ):
         self.status_code = status_code
         self.message = message
+        self.headers = headers
         if request:
             self.request = request
         else:
@@ -89,16 +94,16 @@ class AzureOpenAIConfig(OpenAIConfig):
         top_p: Optional[int] = None,
     ) -> None:
         super().__init__(
-            frequency_penalty,
-            function_call,
-            functions,
-            logit_bias,
-            max_tokens,
-            n,
-            presence_penalty,
-            stop,
-            temperature,
-            top_p,
+            frequency_penalty=frequency_penalty,
+            function_call=function_call,
+            functions=functions,
+            logit_bias=logit_bias,
+            max_tokens=max_tokens,
+            n=n,
+            presence_penalty=presence_penalty,
+            stop=stop,
+            temperature=temperature,
+            top_p=top_p,
         )
 
 
@@ -136,7 +141,7 @@ class AzureTextCompletion(BaseLLM):
             headers["Authorization"] = f"Bearer {azure_ad_token}"
         return headers
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,
@@ -157,11 +162,10 @@ class AzureTextCompletion(BaseLLM):
         client=None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(
-                    status_code=422, message=f"Missing model or messages"
+                    status_code=422, message="Missing model or messages"
                 )
 
             max_retries = optional_params.pop("max_retries", 2)
@@ -229,7 +233,7 @@ class AzureTextCompletion(BaseLLM):
                         client=client,
                         logging_obj=logging_obj,
                     )
-            elif "stream" in optional_params and optional_params["stream"] == True:
+            elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
                     logging_obj=logging_obj,
                     api_base=api_base,
@@ -288,7 +292,10 @@ class AzureTextCompletion(BaseLLM):
                             "api-version", api_version
                         )
 
-                response = azure_client.completions.create(**data, timeout=timeout)  # type: ignore
+                raw_response = azure_client.completions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
+                response = raw_response.parse()
                 stringified_response = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
@@ -308,13 +315,16 @@ class AzureTextCompletion(BaseLLM):
                     )
                 )
         except AzureOpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
-            else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            error_response = getattr(e, "response", None)
+            if error_headers is None and error_response:
+                error_headers = getattr(error_response, "headers", None)
+            raise AzureOpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )
 
     async def acompletion(
         self,
@@ -325,9 +335,9 @@ class AzureTextCompletion(BaseLLM):
         data: dict,
         timeout: Any,
         model_response: ModelResponse,
+        logging_obj: Any,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        logging_obj=None,
     ):
         response = None
         try:
@@ -375,19 +385,25 @@ class AzureTextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.completions.create(**data, timeout=timeout)
+            raw_response = await azure_client.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
+            response = raw_response.parse()
             return openai_text_completion_config.convert_to_chat_model_response_object(
                 response_object=response.model_dump(),
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise e
-            else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            error_response = getattr(e, "response", None)
+            if error_headers is None and error_response:
+                error_headers = getattr(error_response, "headers", None)
+            raise AzureOpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )
 
     def streaming(
         self,
@@ -440,7 +456,10 @@ class AzureTextCompletion(BaseLLM):
                 "complete_input_dict": data,
             },
         )
-        response = azure_client.completions.create(**data, timeout=timeout)
+        raw_response = azure_client.completions.with_raw_response.create(
+            **data, timeout=timeout
+        )
+        response = raw_response.parse()
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -498,7 +517,10 @@ class AzureTextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.completions.create(**data, timeout=timeout)
+            raw_response = await azure_client.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
+            response = raw_response.parse()
             # return response
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
@@ -508,7 +530,11 @@ class AzureTextCompletion(BaseLLM):
             )
             return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
-            else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            error_response = getattr(e, "response", None)
+            if error_headers is None and error_response:
+                error_headers = getattr(error_response, "headers", None)
+            raise AzureOpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )

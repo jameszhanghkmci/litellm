@@ -8,21 +8,27 @@
 #  Tell us how we can improve! - Krrish & Ishaan
 
 
-from typing import Optional, Union
-import litellm, traceback, uuid, json  # noqa: E401
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+import asyncio
+import json
+import traceback
+import uuid
+from typing import Any, List, Optional, Tuple, Union
+
+import aiohttp
 from fastapi import HTTPException
+
+import litellm  # noqa: E401
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (
-    ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    ModelResponse,
     StreamingChoices,
+    get_formatted_prompt,
 )
-import aiohttp
-import asyncio
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomLogger):
@@ -31,14 +37,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
 
     # Class variables or attributes
     def __init__(
-        self, mock_testing: bool = False, mock_redacted_text: Optional[dict] = None
+        self,
+        logging_only: Optional[bool] = None,
+        mock_testing: bool = False,
+        mock_redacted_text: Optional[dict] = None,
     ):
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
 
         self.mock_redacted_text = mock_redacted_text
-        if mock_testing == True:  # for testing purposes only
+        self.logging_only = logging_only
+        if mock_testing is True:  # for testing purposes only
             return
 
         ad_hoc_recognizers = litellm.presidio_ad_hoc_recognizers
@@ -57,29 +67,48 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                     f"An error occurred: {str(e)}, file_path={ad_hoc_recognizers}"
                 )
 
-        self.presidio_analyzer_api_base = litellm.get_secret(
+        self.validate_environment()
+
+    def validate_environment(self):
+        self.presidio_analyzer_api_base: Optional[str] = litellm.get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
-        )
-        self.presidio_anonymizer_api_base = litellm.get_secret(
+        )  # type: ignore
+        self.presidio_anonymizer_api_base: Optional[str] = litellm.get_secret(
             "PRESIDIO_ANONYMIZER_API_BASE", None
-        )
+        )  # type: ignore
 
         if self.presidio_analyzer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANALYZER_API_BASE` from environment")
-        elif not self.presidio_analyzer_api_base.endswith("/"):
+        if not self.presidio_analyzer_api_base.endswith("/"):
             self.presidio_analyzer_api_base += "/"
+        if not (
+            self.presidio_analyzer_api_base.startswith("http://")
+            or self.presidio_analyzer_api_base.startswith("https://")
+        ):
+            # add http:// if unset, assume communicating over private network - e.g. render
+            self.presidio_analyzer_api_base = (
+                "http://" + self.presidio_analyzer_api_base
+            )
 
         if self.presidio_anonymizer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANONYMIZER_API_BASE` from environment")
-        elif not self.presidio_anonymizer_api_base.endswith("/"):
+        if not self.presidio_anonymizer_api_base.endswith("/"):
             self.presidio_anonymizer_api_base += "/"
+        if not (
+            self.presidio_anonymizer_api_base.startswith("http://")
+            or self.presidio_anonymizer_api_base.startswith("https://")
+        ):
+            # add http:// if unset, assume communicating over private network - e.g. render
+            self.presidio_anonymizer_api_base = (
+                "http://" + self.presidio_anonymizer_api_base
+            )
 
     def print_verbose(self, print_statement):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def check_pii(self, text: str, output_parse_pii: bool) -> str:
@@ -123,7 +152,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                         start = item["start"]
                         end = item["end"]
                         replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii == True:
+                        if item["operator"] == "replace" and output_parse_pii is True:
                             # check if token in dict
                             # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
                             if replacement in self.pii_tokens:
@@ -164,6 +193,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
         try:
+            if (
+                self.logging_only is True
+            ):  # only modify the logging obj data (done by async_logging_hook)
+                return data
             permissions = user_api_key_dict.permissions
             output_parse_pii = permissions.get(
                 "output_parse_pii", litellm.output_parse_pii
@@ -183,10 +216,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 # pii masking ##
                 if (
                     content_safety.get("no-pii", None) is not None
-                    and content_safety.get("no-pii") == True
+                    and content_safety.get("no-pii") is True
                 ):
                     # check if user allowed to turn this off
-                    if permissions.get("allow_pii_controls", False) == False:
+                    if permissions.get("allow_pii_controls", False) is False:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -203,7 +236,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 ## pii output parsing ##
                 if content_safety.get("output_parse_pii", None) is not None:
                     # check if user allowed to turn this off
-                    if permissions.get("allow_pii_controls", False) == False:
+                    if permissions.get("allow_pii_controls", False) is False:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -220,7 +253,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                                 },
                             )
 
-            if no_pii == True:  # turn off pii masking
+            if no_pii is True:  # turn off pii masking
                 return data
 
             if call_type == "completion":  # /chat/completions requests
@@ -246,12 +279,50 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             return data
         except Exception as e:
             verbose_proxy_logger.info(
-                f"An error occurred -",
+                "An error occurred -",
             )
             raise e
 
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """
+        Masks the input before logging to langfuse, datadog, etc.
+        """
+        if (
+            call_type == "completion" or call_type == "acompletion"
+        ):  # /chat/completions requests
+            messages: Optional[List] = kwargs.get("messages", None)
+            tasks = []
+
+            if messages is None:
+                return kwargs, result
+
+            for m in messages:
+                text_str = ""
+                if m["content"] is None:
+                    continue
+                if isinstance(m["content"], str):
+                    text_str = m["content"]
+                    tasks.append(
+                        self.check_pii(text=text_str, output_parse_pii=False)
+                    )  # need to pass separately b/c presidio has context window limits
+            responses = await asyncio.gather(*tasks)
+            for index, r in enumerate(responses):
+                if isinstance(messages[index]["content"], str):
+                    messages[index][
+                        "content"
+                    ] = r  # replace content with redacted string
+            verbose_proxy_logger.info(
+                f"Presidio PII Masking: Redacted pii message: {messages}"
+            )
+            kwargs["messages"] = messages
+
+        return kwargs, result
+
     async def async_post_call_success_hook(
         self,
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
     ):
@@ -261,7 +332,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         verbose_proxy_logger.debug(
             f"PII Masking Args: litellm.output_parse_pii={litellm.output_parse_pii}; type of response={type(response)}"
         )
-        if litellm.output_parse_pii == False:
+        if litellm.output_parse_pii is False:
             return response
 
         if isinstance(response, ModelResponse) and not isinstance(

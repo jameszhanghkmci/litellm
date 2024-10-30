@@ -143,8 +143,12 @@ enum Providers {
   Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
+  Groq = "Groq",
+  MistralAI = "Mistral AI",
+  Deepseek = "Deepseek",
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+  Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
 }
@@ -156,9 +160,13 @@ const provider_map: Record<string, string> = {
   Anthropic: "anthropic",
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
+  Groq: "groq",
+  MistralAI: "mistral",
+  Cohere: "cohere_chat",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  Deepseek: "deepseek",
   Ollama: "ollama",
 
 };
@@ -208,10 +216,10 @@ const handleSubmit = async (
         if (key == "model_name") {
           modelName = modelName + value;
         } else if (key == "custom_llm_provider") {
-          // const providerEnumValue = Providers[value as keyof typeof Providers];
-          // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
-          // modelName = mappingResult + "/" + modelName
-          continue;
+          console.log("custom_llm_provider:", value);
+          const mappingResult = provider_map[value]; // Get the corresponding value from the mapping
+          litellmParamsObj["custom_llm_provider"] = mappingResult;
+          console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {
           continue;
         }
@@ -220,6 +228,9 @@ const handleSubmit = async (
         else if (key === "base_model") {
           // Add key-value pair to model_info dictionary
           modelInfoObj[key] = value;
+        }
+        else if (key === "custom_model_name") {
+          litellmParamsObj["model"] = value;
         } else if (key == "litellm_extra_params") {
           console.log("litellm_extra_params:", value);
           let litellmExtraParams = {};
@@ -296,6 +307,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [availableModelGroups, setAvailableModelGroups] = useState<
     Array<string>
   >([]);
+  const [availableProviders, setavailableProviders] = useState<
+  Array<string>
+>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(
     null
   );
@@ -400,6 +414,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <Form.Item className="mt-8" label="api_base" name="api_base">
               <TextInput />
             </Form.Item>
+            <Form.Item
+              label="organization"
+              name="organization"
+              tooltip="OpenAI Organization ID"
+            >
+                <TextInput />
+            </Form.Item>
 
             <Form.Item
               label="tpm"
@@ -438,19 +459,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Form.Item>
 
             <Form.Item
-              label="input_cost_per_token"
-              name="input_cost_per_token"
-              tooltip="float (optional) - Input cost per token"
+              label="Input Cost per 1M Tokens"
+              name="input_cost_per_million_tokens"
+              tooltip="float (optional) - Input cost per 1 million tokens"
             >
-              <InputNumber min={0} step={0.0001} />
+              <InputNumber min={0} step={0.01} />
             </Form.Item>
 
             <Form.Item
-              label="output_cost_per_token"
-              name="output_cost_per_token"
-              tooltip="float (optional) - Output cost per token"
+              label="Output Cost per 1M Tokens"
+              name="output_cost_per_million_tokens"
+              tooltip="float (optional) - Output cost per 1 million tokens"
             >
-              <InputNumber min={0} step={0.0001} />
+              <InputNumber min={0} step={0.01} />
             </Form.Item>
 
             <Form.Item
@@ -497,6 +518,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
     let newLiteLLMParams: Record<string, any> = {};
     let model_info_model_id = null;
+
+    if (formValues.input_cost_per_million_tokens) {
+      formValues.input_cost_per_token = formValues.input_cost_per_million_tokens / 1000000;
+      delete formValues.input_cost_per_million_tokens;
+    }
+    if (formValues.output_cost_per_million_tokens) {
+      formValues.output_cost_per_token = formValues.output_cost_per_million_tokens / 1000000;
+      delete formValues.output_cost_per_million_tokens;
+    }
 
     for (const [key, value] of Object.entries(formValues)) {
       if (key !== "model_id") {
@@ -605,7 +635,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         setModelData(modelDataResponse);
 
         // loop through modelDataResponse and get all`model_name` values
-
         let all_model_groups: Set<string> = new Set();
         for (let i = 0; i < modelDataResponse.data.length; i++) {
           const model = modelDataResponse.data[i];
@@ -625,7 +654,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           _initial_model_group =
             _array_model_groups[_array_model_groups.length - 1];
           console.log("_initial_model_group:", _initial_model_group);
-          setSelectedModelGroup(_initial_model_group);
+          //setSelectedModelGroup(_initial_model_group);
         }
 
         console.log("selectedModelGroup:", selectedModelGroup);
@@ -743,7 +772,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     const fetchModelMap = async () => {
-      const data = await modelCostMap();
+      const data = await modelCostMap(accessToken);
       console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
     };
@@ -762,11 +791,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     return <div>Loading...</div>;
   }
   let all_models_on_proxy: any[] = [];
+  let all_providers: string[] = [];
 
   // loop through model data and edit each row
   for (let i = 0; i < modelData.data.length; i++) {
     let curr_model = modelData.data[i];
     let litellm_model_name = curr_model?.litellm_params?.model;
+    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
     let model_info = curr_model?.model_info;
 
     let defaultProvider = "openai";
@@ -801,13 +832,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       let firstElement = splitModel[0];
 
       // If there is only one element, default provider to openai
-      provider =
+      provider = custom_llm_provider;
+      if (!provider) {
+        provider =
         splitModel.length === 1
           ? getProviderFromModel(litellm_model_name)
           : firstElement;
+        
+      }
+      
     } else {
       // litellm_model_name is null or undefined, default provider to openai
-      provider = "openai";
+      provider = "-";
     }
 
     if (model_info) {
@@ -828,6 +864,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
+    modelData.data[i].litellm_model_name = litellm_model_name;
+    all_providers.push(provider);
 
     // Convert Cost in terms of Cost per 1M tokens
     if (modelData.data[i].input_cost) {
@@ -852,6 +890,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     console.log(modelData.data[i]);
   }
   // when users click request access show pop up to allow them to request access
+
+  // sort modelData.data by provider alphabetically, check if provider exists and is not null / undefined
+  if (modelData.data && modelData.data.length > 0) {
+    modelData.data.sort((a: any, b: any) => {
+      if (a.provider && b.provider) {
+        return a.provider.localeCompare(b.provider);
+      } else if (a.provider && !b.provider) {
+        return -1;
+      } else if (!a.provider && b.provider) {
+        return 1;
+      } else {
+        return 0;
+      }
+    });
+  }
+
 
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
@@ -887,7 +941,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             _providerModels.push(key);
           }
         });
+
+        // Special case for cohere_chat
+        // we need both cohere_chat and cohere models to show on dropdown
+        if (providerKey == Providers.Cohere) {
+          console.log("adding cohere chat model")
+          Object.entries(modelMap).forEach(([key, value]) => {
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              "litellm_provider" in (value as object) &&
+              ((value as any)["litellm_provider"] === "cohere")
+            ) {
+              _providerModels.push(key);
+            }
+          });
+        }
       }
+
+      
+
       setProviderModels(_providerModels);
       console.log(`providerModels: ${providerModels}`);
     }
@@ -1318,7 +1391,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : availableModelGroups[0]
+                      : undefined
                   }
                   onValueChange={(value) =>
                     setSelectedModelGroup(value === "all" ? "all" : value)
@@ -1326,7 +1399,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   value={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : availableModelGroups[0]
+                      : undefined
                   }
                 >
                   <SelectItem value={"all"}>All Models</SelectItem>
@@ -1364,6 +1437,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         }}
                       >
                         Provider
+                      </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "150px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                          fontSize: "11px",
+                        }}
+                      >
+                        LiteLLM Model
                       </TableHeaderCell>
                       {userRole === "Admin" && (
                         <TableHeaderCell
@@ -1491,6 +1574,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p className="text-xs">{model.provider || "-"}</p>
+                          </TableCell>
+                          <TableCell
+                            style={{
+                              maxWidth: "100px",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            <Tooltip title={model && model.litellm_model_name}>
+                                <pre
+                                  style={{
+                                    maxWidth: "150px",
+                                    whiteSpace: "normal",
+                                    wordBreak: "break-word",
+                                  }}
+                                  className="text-xs"
+                                  title={
+                                    model && model.litellm_model_name
+                                      ? model.litellm_model_name
+                                      : ""
+                                  }
+                                >
+                                  {model && model.litellm_model_name
+                                    ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
+                                    : "-"}
+                                </pre>
+                              </Tooltip>
+                            
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
@@ -1693,7 +1804,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     className="mb-0"
                   >
                     <TextInput
-                      placeholder={getPlaceholder(selectedProvider.toString())}
+                      
                     />
                   </Form.Item>
                   <Row>
@@ -1705,16 +1816,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Col>
                   </Row>
                   <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
-                    label="LiteLLM Model Name(s)"
+                  label="LiteLLM Model Name(s)"
+                  tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
+                  className="mb-0"
+                >
+                  <Form.Item
                     name="model"
-                    tooltip="Actual model name used for making litellm.completion() call."
-                    className="mb-0"
+                    rules={[{ required: true, message: "Required" }]}
+                    noStyle
                   >
-                    {selectedProvider === Providers.Azure ? (
-                      <TextInput placeholder="Enter model name" />
+                     { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     ) : providerModels.length > 0 ? (
-                      <MultiSelect value={providerModels}>
+                      <MultiSelect>
+                      <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
                         {providerModels.map((model, index) => (
                           <MultiSelectItem key={index} value={model}>
                             {model}
@@ -1722,9 +1837,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         ))}
                       </MultiSelect>
                     ) : (
-                      <TextInput placeholder="gpt-3.5-turbo-0125" />
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     )}
                   </Form.Item>
+
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
+                  >
+                    {({ getFieldValue }) => {
+                      const selectedModels = getFieldValue('model') || [];
+                      return selectedModels.includes('custom') && (
+                        <Form.Item
+                          name="custom_model_name"
+                          rules={[{ required: true, message: "Please enter a custom model name" }]}
+                          className="mt-2"
+                        >
+                          <TextInput placeholder="Enter custom model name" />
+                        </Form.Item>
+                      )
+                    }}
+                  </Form.Item>
+                </Form.Item>
                   <Row>
                     <Col span={10}></Col>
                     <Col span={10}>
@@ -1768,7 +1902,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Form.Item>
                     )}
                   {selectedProvider == Providers.OpenAI && (
-                    <Form.Item label="Organization ID" name="organization_id">
+                    <Form.Item label="Organization ID" name="organization">
                       <TextInput placeholder="[OPTIONAL] my-unique-org" />
                     </Form.Item>
                   )}
@@ -1827,9 +1961,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )}
                   {selectedProvider == Providers.Azure && (
                     <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
                       label="API Version"
                       name="api_version"
+                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
                     >
                       <TextInput placeholder="2023-07-01-preview" />
                     </Form.Item>
