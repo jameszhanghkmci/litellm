@@ -49,7 +49,7 @@ model_list:
         threshold: BLOCK_ONLY_HIGH
   - model_name: gemini-1.5-pro
     litellm_params: 
-      model: vertex_ai/gemini-1.5-pro-002
+      model: vertex_ai/gemini-1.5-pro-001
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_ONLY_HIGH
@@ -61,7 +61,7 @@ model_list:
         threshold: BLOCK_ONLY_HIGH
   - model_name: gemini-1.5-pro-latest
     litellm_params: 
-      model: vertex_ai/gemini-1.5-pro-002
+      model: vertex_ai/gemini-1.5-pro-001
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_ONLY_HIGH
@@ -85,7 +85,7 @@ model_list:
         threshold: BLOCK_ONLY_HIGH
   - model_name: gemini-1.5-pro-json
     litellm_params: 
-      model: vertex_ai/gemini-1.5-pro-002
+      model: vertex_ai/gemini-1.5-pro-001
       response_mime_type: application/json
       safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
